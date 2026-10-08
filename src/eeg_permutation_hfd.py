@@ -16,7 +16,7 @@ import argparse
 SEED = 100
 K_STATES_LIST_EEG = list(range(6, 12))  # k range is 4-9 for EEG
 EEG_data_dir = "data/EEG_data/HFD_PSD_4sec_75overlap_6min"
-MRI_csv_path = "/data/s.dharia-ra/PEARL/final_multi_modal/data/MRI_data/ROI_aal3_Vgm.csv_with_groups.csv"
+MRI_csv_path = "data/MRI_data/ROI_aal3_Vgm.csv_with_groups.csv"
 RESULTS_DIR = "loso_eeg_permutation_results"
 N_PERMUTATIONS = 1000   # set to 1000 or more for final runs (keeps runtime reasonable here)
 os.makedirs(RESULTS_DIR, exist_ok=True)

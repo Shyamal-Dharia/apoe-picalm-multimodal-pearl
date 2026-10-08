@@ -1,5 +1,7 @@
 ## ================================================================
 ## run_pairwise_significant_mediations.R
+## Run from the repository root after src/mediation_grid.R:
+##   MEDIATION_CORES=60 Rscript src/run_pairwise_significant_mediations.R
 ## Pairwise mediation for significant (y, mediator) pairs
 ## Comparisons:
 ##   1. 0 vs 1   (N vs A+P-)
@@ -16,24 +18,33 @@
 ##   gene_bin = 1 => g2 (treatment)
 ## ================================================================
 
-library(mediation)
-library(tidyverse)
+suppressPackageStartupMessages({
+  library(mediation)
+  library(tidyverse)
+  library(parallel)
+})
 
 ## -----------------------------
 ## 1. Paths
 ## -----------------------------
-data_path <- "/data/s.dharia-ra/PEARL/MM-Mediation-Genes-AD/mediation_ready_all_smri_eeg_fmri.csv"
-sig_path  <- "/data/s.dharia-ra/PEARL/MM-Mediation-Genes-AD/mediation_grid_significant_acme.csv"
+data_path   <- "data/mediation_input_n64.csv"   # from src/build_mediation_input.py
+sample_path <- "data/participants_n64.csv"   # from src/select_participants.py
+sig_path    <- "results/mediation/mediation_grid_significant_acme.csv"
+base_seed   <- 2026L
+n_cores     <- as.integer(Sys.getenv("MEDIATION_CORES", Sys.getenv("SLURM_CPUS_PER_TASK", "1")))
 
 ## Output CSVs
-out_01 <- "pairwise_mediation_0_vs_1.csv"
-out_02 <- "pairwise_mediation_0_vs_2.csv"
-out_12 <- "pairwise_mediation_1_vs_2.csv"
+out_01 <- "results/mediation/pairwise_mediation_0_vs_1.csv"
+out_02 <- "results/mediation/pairwise_mediation_0_vs_2.csv"
+out_12 <- "results/mediation/pairwise_mediation_1_vs_2.csv"
 
 ## -----------------------------
 ## 2. Load data
 ## -----------------------------
 dat <- read.csv(data_path, check.names = TRUE)
+sample_ids <- read.csv(sample_path)$participant_id
+dat <- dat[dat$participant_id %in% sample_ids, ]
+stopifnot(nrow(dat) == length(sample_ids))
 sig <- read.csv(sig_path, check.names = TRUE)
 
 stopifnot(all(c("y", "mediator") %in% names(sig)))
@@ -59,6 +70,7 @@ if (length(covars) > 0) {
     if (is.character(x)) factor(x) else x
   })
 }
+dat$learning_deficits <- factor(dat$learning_deficits)  # categorical codes, as in the original analysis
 
 ## -----------------------------
 ## 4. Choose family of Y
@@ -98,9 +110,7 @@ run_pairwise <- function(dat, sig, g1, g2, outfile) {
   ## re-code gene → 0/1 for mediation
   df <- df %>% mutate(gene_bin = ifelse(gene == g1, 0, 1))
 
-  results <- list()
-
-  for (i in seq_len(nrow(sig))) {
+  one_pair <- function(i) {
 
     y_name <- sig$y[i]
     m_name <- sig$mediator[i]
@@ -116,9 +126,9 @@ run_pairwise <- function(dat, sig, g1, g2, outfile) {
     vars_needed <- c("gene_bin", y_name, m_name, covars)
     df_sub <- df[complete.cases(df[, vars_needed, drop = FALSE]), vars_needed, drop = FALSE]
 
-    if (nrow(df_sub) < 25) next
-    if (var(df_sub$gene_bin) == 0) next
-    if (var(df_sub[[m_name]]) == 0) next
+    if (nrow(df_sub) < 25) return(NULL)
+    if (var(df_sub$gene_bin) == 0) return(NULL)
+    if (var(df_sub[[m_name]]) == 0) return(NULL)
 
     ## Outcome and mediator formulas
     f_out <- make_formula(
@@ -184,7 +194,8 @@ run_pairwise <- function(dat, sig, g1, g2, outfile) {
     y_mean_g1 <- mean(df_sub[[y_name]][df_sub$gene_bin == 0])
     y_mean_g2 <- mean(df_sub[[y_name]][df_sub$gene_bin == 1])
 
-    ## Mediation
+    ## Mediation (one fixed seed per contrast and pair)
+    set.seed(base_seed + 1000L * (g1 + g2) + i)
     med_fit <- mediate(
       model.m       = med_model,
       model.y       = out_model,
@@ -197,7 +208,7 @@ run_pairwise <- function(dat, sig, g1, g2, outfile) {
 
     sumfit <- summary(med_fit)
 
-    results[[i]] <- data.frame(
+    data.frame(
       y = y_name,
       mediator = m_name,
 
@@ -229,6 +240,9 @@ run_pairwise <- function(dat, sig, g1, g2, outfile) {
     )
   }
 
+  results <- mclapply(seq_len(nrow(sig)), one_pair, mc.cores = n_cores)
+  failed <- vapply(results, inherits, logical(1), what = "try-error")
+  if (any(failed)) stop("Worker error: ", as.character(results[[which(failed)[1]]]))
   results_df <- bind_rows(results)
   write.csv(results_df, outfile, row.names = FALSE)
   message("Saved results to: ", outfile)

@@ -45,10 +45,16 @@ def multi_scale_mmd(source, target):
 
 
 # Base directory for all data
-BASE_DATA_DIR = "./data"
+BASE_DATA_DIR = "../data"
 SMRI_DATA_DIR = os.path.join(BASE_DATA_DIR, "MRI_data")
+# OLD
 EEG_DATA_DIR = os.path.join(BASE_DATA_DIR, "EEG_data/HFD_PSD_4sec_75overlap_6min")
-FMRI_DATA_DIR = os.path.join(BASE_DATA_DIR, "fMRI_data")
+# FMRI_DATA_DIR = os.path.join(BASE_DATA_DIR, "fMRI_data")
+# NEW 60s
+print("NEW fMRI data directories 60 SECS:")
+# EEG_DATA_DIR = os.path.join(BASE_DATA_DIR, "EEG_data/HFD_PSD_60sec_75overlap_6min")
+FMRI_DATA_DIR = os.path.join(BASE_DATA_DIR, "fMRI_data/subject_windows_confounds_old_60sec")
+
 
 
 # --- Step 1: Helper Functions to Load Data for Each Modality ---
@@ -1208,7 +1214,7 @@ def load_multimodal_data(classes=("N", "A+P+"), verbose=True):
     eeg_dir = EEG_DATA_DIR
     fmri_dir = FMRI_DATA_DIR
     smri_dir = SMRI_DATA_DIR
-    psychometric_tsv = "filtered_participants.tsv"  # Update this path
+    psychometric_tsv = os.path.join(BASE_DATA_DIR, "filtered_participants.tsv")
     
     # Load and filter all modalities
     filtered_eeg, filtered_fmri, filtered_smri, filtered_psychometric, common_subjects = load_and_filter_all_modalities(
@@ -1347,7 +1353,7 @@ def analyze_common_subject_data():
     eeg_dir = os.path.join("data", "EEG_data", "EEG_data_plv")
     fmri_dir = os.path.join("data", "fMRI_data")
     smri_dir = os.path.join("data", "MRI_data")
-    participants_tsv_path = "filtered_participants.tsv"
+    participants_tsv_path = os.path.join(BASE_DATA_DIR, "filtered_participants.tsv")
 
     print("--- Finding Common Subjects Across All Modalities ---")
     

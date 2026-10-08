@@ -27,7 +27,7 @@ band_dict = {
 }
 
 # Load the CSV file containing participant information.
-csv_data = pd.read_csv('participants.csv', sep='\t')
+csv_data = pd.read_csv('data/participants.csv', sep='\t')
 
 skipped_log = []
 fs = 256

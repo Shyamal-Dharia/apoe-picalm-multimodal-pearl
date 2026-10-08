@@ -42,7 +42,11 @@ def get_start_end(events, start_code: int = 4, end_code: int = 11):
 # ─────────────────────────────────────────────────────────────
 # 1. Locate files & determine common subjects
 # ─────────────────────────────────────────────────────────────
-ROOT = "/data/s.dharia-ra/PEARL"
+# PEARL_ROOT must contain: original_data/ (OpenNeuro ds004796), fMRI-PEARL/participants.tsv,
+# and the fMRI folders below (used only to keep subjects with fMRI data).
+ROOT = os.environ.get("PEARL_ROOT")
+if ROOT is None:
+    raise SystemExit("Set PEARL_ROOT, e.g. PEARL_ROOT=/path/to/PEARL python src/EEG_raw_preprocessing.py")
 file_paths_eeg   = glob.glob(f"{ROOT}/original_data/sub-*/eeg/*_task-rest_eeg.vhdr")
 file_paths_fmri1 = glob.glob(f"{ROOT}/fMRI-PEARL/derivatives_selected/sub-*/")
 file_paths_fmri2 = glob.glob(f"{ROOT}/fMRI-PEARL/PEARL-Neuro_Database_MRI_Stephen_Smith/sub-*/")
@@ -91,7 +95,7 @@ print(labels_df[["participant_id", "risk_group"]].head(), "\n")
 LOWCUT = 1.0        # Hz
 HIGHCUT = 45.0      # Hz
 ADJUST_SAMPLES = 361_291  # ≈ 23.5 min @ 256 Hz – must match protocol
-OUTPUT_DIR = "resting_state_preprocessed_data"
+OUTPUT_DIR = "data/EEG_data/resting_state_preprocessed_data_new"  # input to EEG_feature_extraction.py
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 # ─────────────────────────────────────────────────────────────

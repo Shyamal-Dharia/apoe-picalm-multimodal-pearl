@@ -1,0 +1,13 @@
+# Generated outputs (recreate with the commands in README.md)
+results/
+
+# Data (download from https://openneuro.org/datasets/ds004796)
+data/EEG_data/
+data/fMRI_data/
+
+# Build artifacts and caches
+src/libhfd.so
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+.Rhistory
