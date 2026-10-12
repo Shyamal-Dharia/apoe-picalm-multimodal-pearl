@@ -52,6 +52,13 @@ P_VALUE_SMOOTHING = 1e-10
 WEIGHT_POWER = 2.0
 
 XGB_DEVICE = "cuda"
+
+# How the null is built. "full": permute the subject label vector once per permutation and
+# rerun the cross-validation with it, so each fold's training and held-out labels come from
+# the same permutation (Ojala & Garriga, 2010). "per-fold": shuffle each fold's training labels
+# independently and score against the true held-out labels (the scheme used for the April 2026
+# table; it can give a narrower null). Set with --perm-scheme.
+PERM_SCHEME = "full"
 XGB_N_JOBS = 1
 DEFAULT_PERM_JOBS = min(8, os.cpu_count() or 1)
 
@@ -221,6 +228,9 @@ def prepare_multimodal_data(classes, verbose=True):
         participants_tsv,
         verbose=verbose,
     )
+    # Fixed subject order: common_subjects is a set, whose iteration order changes between runs
+    # (string hashing), and k-means++ initialization depends on the order of the windows.
+    common_subjects = sorted(common_subjects)
 
     X_eeg, y_eeg, sub_ids_eeg = extract_eeg_window_level_features(
         eeg_data_dir, common_subjects, participants_tsv, classes
@@ -243,7 +253,7 @@ def prepare_multimodal_data(classes, verbose=True):
     }
 
     for key in ["eeg", "fmri", "smri", "psychometric"]:
-        sort_idx = multimodal_data[key]["sub_ids"].argsort()
+        sort_idx = multimodal_data[key]["sub_ids"].argsort(kind="stable")  # keeps each subject's windows in time order
         multimodal_data[key]["sub_ids"] = multimodal_data[key]["sub_ids"][sort_idx]
         multimodal_data[key]["X"] = multimodal_data[key]["X"][sort_idx]
         multimodal_data[key]["y"] = _as_int_labels(multimodal_data[key]["y"][sort_idx])
@@ -292,6 +302,8 @@ def build_task_context(classes, verbose=True):
         "classes": tuple(classes),
         "multimodal_data": multimodal_data,
         "folds": folds,
+        "subject_ids": multimodal_data["smri"]["sub_ids"],
+        "subject_labels": _as_int_labels(multimodal_data["smri"]["y"]),
     }
 
 
@@ -380,6 +392,12 @@ def compute_eeg_subject_features(X_data, y_data, sub_ids_data, target_subjects, 
     return np.asarray(subject_features), _as_int_labels(subject_labels)
 
 
+# A participant's EEG value for a state is the SD of the distances of their windows in that state
+# to its centroid. With a single window the SD is 0, which is not a measured variability, so a
+# state needs at least this many windows; otherwise the value is missing (as with no window).
+EEG_MIN_STATE_WINDOWS = 2
+
+
 def compute_eeg_std_distance_features(X_data, y_data, sub_ids_data, target_subjects, kmeans_model, k_states):
     centroids = kmeans_model.cluster_centers_
     subject_features, subject_labels = [], []
@@ -395,7 +413,7 @@ def compute_eeg_std_distance_features(X_data, y_data, sub_ids_data, target_subje
 
         for state in range(k_states):
             state_windows = subject_windows[subject_states == state]
-            if state_windows.shape[0] > 0:
+            if state_windows.shape[0] >= EEG_MIN_STATE_WINDOWS:
                 distances = np.linalg.norm(state_windows - centroids[state], axis=1)
                 std_dist[state] = float(np.std(distances))
 
@@ -481,7 +499,7 @@ def _predict_xgb_binary_from_cache(cache, seed, y_train_override=None, device=No
         learning_rate=0.05,
         eval_metric="logloss",
         random_state=seed,
-        scale_pos_weight=cache["scale_pos_weight"],
+        scale_pos_weight=_get_scale_pos_weight(y_train),  # from the (possibly permuted) labels
         tree_method="hist",
         n_jobs=XGB_N_JOBS,
         verbosity=0,
@@ -730,9 +748,33 @@ def build_seed_fold_cache(task_context, seed, verbose=True):
                 total_folds=total_folds,
             ),
         }
+        subject_ids = task_context["subject_ids"]
+        subject_labels = task_context["subject_labels"]
+        test_position = int(np.flatnonzero(subject_ids == fold_entry["test_subjects"][0])[0])
+        fold_cache["test_position"] = test_position
+        fold_cache["subject_labels"] = subject_labels
+        # Every modality must list its training labels in subject order, so that one permuted
+        # label vector can be applied to all of them.
+        expected = np.delete(subject_labels, test_position)
+        for name, labels in _training_label_arrays(fold_cache).items():
+            assert np.array_equal(labels, expected), f"fold {fold_entry['fold_index']}: {name} labels out of order"
         seed_fold_cache.append(fold_cache)
 
     return seed_fold_cache
+
+
+def _training_label_arrays(fold_cache):
+    arrays = {
+        "sMRI": fold_cache["smri"]["y_train"],
+        "Psychometric": fold_cache["psychometric"]["y_train"],
+        "fMRI": fold_cache["fmri"]["y_train_subjects"],
+    }
+    eeg_cache = fold_cache["eeg"]
+    if eeg_cache["mode"] == "legacy_state":
+        arrays["EEG"] = eeg_cache["legacy"]["y_train_subjects"]
+    elif eeg_cache["mode"] == "state":
+        arrays["EEG"] = eeg_cache["state"]["y_train_subjects"]
+    return {name: _as_int_labels(a) for name, a in arrays.items() if len(a)}
 
 
 def _predict_state_ensemble_from_cache(cache, y_train_subjects, seed):
@@ -1069,16 +1111,28 @@ def _run_single_permutation_with_cache(seed_val, perm_idx, seed_fold_cache, xgb_
         permutation_predictions = {mod: [] for mod in MODALITIES}
         permutation_true_labels = []
         model_seed_base = seed_val * 100_000 + perm_idx
+        full = PERM_SCHEME == "full"
+        if full:
+            y_perm = rng.permutation(seed_fold_cache[0]["subject_labels"])
+
+        def train_labels(original):
+            """Permuted training labels for one fold and modality."""
+            if full:
+                return np.delete(y_perm, fold_cache["test_position"])
+            return rng.permutation(original)
 
         for fold_idx, fold_cache in enumerate(seed_fold_cache):
-            permutation_true_labels.extend(fold_cache["true_labels"].tolist())
+            if full:
+                permutation_true_labels.append(int(y_perm[fold_cache["test_position"]]))
+            else:
+                permutation_true_labels.extend(fold_cache["true_labels"].tolist())
 
             smri_cache = fold_cache["smri"]
             psych_cache = fold_cache["psychometric"]
             fmri_cache = fold_cache["fmri"]
             eeg_cache = fold_cache["eeg"]
 
-            y_train_perm = rng.permutation(smri_cache["y_train"])
+            y_train_perm = train_labels(smri_cache["y_train"])
             y_pred_perm = _predict_xgb_binary_from_cache(
                 smri_cache,
                 model_seed_base + fold_idx,
@@ -1087,7 +1141,7 @@ def _run_single_permutation_with_cache(seed_val, perm_idx, seed_fold_cache, xgb_
             )
             permutation_predictions["sMRI"].extend(y_pred_perm.tolist())
 
-            y_train_perm = rng.permutation(psych_cache["y_train"])
+            y_train_perm = train_labels(psych_cache["y_train"])
             y_pred_perm = _predict_xgb_binary_from_cache(
                 psych_cache,
                 model_seed_base + 10_000 + fold_idx,
@@ -1096,7 +1150,7 @@ def _run_single_permutation_with_cache(seed_val, perm_idx, seed_fold_cache, xgb_
             )
             permutation_predictions["Psychometric"].extend(y_pred_perm.tolist())
 
-            y_train_perm = rng.permutation(fmri_cache["y_train_subjects"])
+            y_train_perm = train_labels(fmri_cache["y_train_subjects"])
             perm_pred = _predict_state_ensemble_from_cache(
                 fmri_cache,
                 y_train_perm,
@@ -1108,7 +1162,7 @@ def _run_single_permutation_with_cache(seed_val, perm_idx, seed_fold_cache, xgb_
                 permutation_predictions["EEG"].extend(np.zeros(eeg_cache["test_size"], dtype=int).tolist())
             elif eeg_cache["mode"] == "legacy_state":
                 eeg_legacy_cache = eeg_cache["legacy"]
-                y_train_perm = rng.permutation(eeg_legacy_cache["y_train_subjects"])
+                y_train_perm = train_labels(eeg_legacy_cache["y_train_subjects"])
                 perm_pred = _predict_eeg_legacy_state_from_cache(
                     eeg_legacy_cache,
                     y_train_perm,
@@ -1117,6 +1171,8 @@ def _run_single_permutation_with_cache(seed_val, perm_idx, seed_fold_cache, xgb_
                 permutation_predictions["EEG"].extend(np.asarray(perm_pred, dtype=int).tolist())
             elif eeg_cache["mode"] == "direct":
                 eeg_binary_cache = eeg_cache["binary"]
+                if full:
+                    raise NotImplementedError("full permutation is not implemented for the window-level EEG mode")
                 y_train_perm = rng.permutation(eeg_binary_cache["y_train"])
                 y_pred_perm = _predict_xgb_binary_from_cache(
                     eeg_binary_cache,
@@ -1127,7 +1183,7 @@ def _run_single_permutation_with_cache(seed_val, perm_idx, seed_fold_cache, xgb_
                 permutation_predictions["EEG"].extend(y_pred_perm.tolist())
             else:
                 eeg_state_cache = eeg_cache["state"]
-                y_train_perm = rng.permutation(eeg_state_cache["y_train_subjects"])
+                y_train_perm = train_labels(eeg_state_cache["y_train_subjects"])
                 perm_pred = _predict_state_ensemble_from_cache(
                     eeg_state_cache,
                     y_train_perm,
@@ -1355,13 +1411,14 @@ def build_publication_f1_table(
     n_permutations=1000,
     n_jobs=1,
     verbose=True,
+    tasks=None,
 ):
     observed_seeds = _normalize_seeds(seeds)
     permutation_seeds = observed_seeds if permutation_seeds is None else _normalize_seeds(permutation_seeds)
     all_rows = []
     raw_results = {}
 
-    for task in TASKS:
+    for task in (TASKS if tasks is None else [TASKS[i - 1] for i in tasks]):
         task_label = TASK_LABELS[task]
 
         _log(verbose, "\n" + "=" * 80)
@@ -1387,6 +1444,8 @@ def build_publication_f1_table(
         )
         df["p-value"] = df["p_value"].apply(lambda value: f"{value:.3f}{p_marker(value)}")
         df["Observed_Mean_F1_raw"] = df["Observed_Mean_F1"]
+        df["Null_Mean_F1_raw"] = df["Permutation_Mean_F1"]
+        df["Null_SD_F1_raw"] = df["Permutation_Std_F1"]
         df["p_value_raw"] = df["p_value"]
         df["Observed_N_Runs_raw"] = df["Observed_N_Runs"]
         df["Permutation_N_Runs_raw"] = df["Permutation_N_Runs"]
@@ -1402,12 +1461,18 @@ def build_publication_f1_table(
                     "Permutation_N_Runs_raw",
                     "Observed_Mean_F1_raw",
                     "p_value_raw",
+                    "Null_Mean_F1_raw",
+                    "Null_SD_F1_raw",
                 ]
             ]
         )
 
-    table_df = pd.concat(all_rows, ignore_index=True)
+    table_df, pretty_df = _publication_tables(pd.concat(all_rows, ignore_index=True))
+    return table_df, pretty_df, raw_results
 
+
+def _publication_tables(table_df):
+    """Sort the raw rows in table order and build the pretty table."""
     table_df["Group Comparison"] = pd.Categorical(
         table_df["Group Comparison"],
         categories=TASK_ORDER,
@@ -1424,7 +1489,7 @@ def build_publication_f1_table(
     pretty_df["Group Comparison"] = pretty_df["Group Comparison"].astype(str)
     pretty_df.loc[pretty_df["Group Comparison"].duplicated(), "Group Comparison"] = ""
 
-    return table_df, pretty_df, raw_results
+    return table_df, pretty_df
 
 
 def style_publication_table(table_df):
@@ -1468,11 +1533,34 @@ def _parse_args():
         help="Number of parallel workers for permutation runs. Use 1 to disable parallelism.",
     )
     parser.add_argument("--table", action="store_true", help="Run all task comparisons and print a publication table.")
+    parser.add_argument("--perm-scheme", choices=["full", "per-fold"], default="full",
+                        help="Null construction (see PERM_SCHEME). Default: full.")
+    parser.add_argument("--out-dir", default=None, help="Output folder (default: results/permutation).")
+    parser.add_argument("--tasks", nargs="+", type=int, choices=[1, 2, 3, 4], default=None,
+                        help="With --table, run only these comparisons: 1 N vs A+P-, 2 N vs A+P+, "
+                             "3 A+P- vs A+P+, 4 N vs all carriers (to run them as parallel jobs).")
+    parser.add_argument("--assemble", nargs="+", default=None, metavar="DIR",
+                        help="Combine the raw tables written by --tasks runs in these folders into "
+                             "--out-dir, then exit.")
     return parser.parse_args()
 
 
 def main():
+    global PERM_SCHEME, RESULTS_DIR
     args = _parse_args()
+    PERM_SCHEME = args.perm_scheme
+    if args.out_dir:
+        RESULTS_DIR = os.path.abspath(args.out_dir)
+    os.makedirs(RESULTS_DIR, exist_ok=True)
+    print(f"Permutation scheme: {PERM_SCHEME}; output: {RESULTS_DIR}")
+
+    if args.assemble:
+        parts = [pd.read_csv(os.path.join(d, "publication_f1_permutation_table_raw.csv")) for d in args.assemble]
+        table_df, pretty_df = _publication_tables(pd.concat(parts, ignore_index=True))
+        table_df.to_csv(os.path.join(RESULTS_DIR, "publication_f1_permutation_table_raw.csv"), index=False)
+        pretty_df.to_csv(os.path.join(RESULTS_DIR, "publication_f1_permutation_table_pretty.csv"), index=False)
+        print(pretty_df.to_string(index=False))
+        return
 
     if args.table:
         table_df, pretty_df, _ = build_publication_f1_table(
@@ -1480,6 +1568,7 @@ def main():
             permutation_seeds=None if args.perm_seeds is None else tuple(args.perm_seeds),
             n_permutations=args.permutations,
             n_jobs=args.jobs,
+            tasks=args.tasks,
         )
         print(pretty_df.to_string(index=False))
         table_df.to_csv(os.path.join(RESULTS_DIR, "publication_f1_permutation_table_raw.csv"), index=False)
