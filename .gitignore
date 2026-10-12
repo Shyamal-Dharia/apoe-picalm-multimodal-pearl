@@ -1,9 +1,12 @@
 # Generated outputs (recreate with the commands in README.md)
 results/
 
-# Data (download from https://openneuro.org/datasets/ds004796)
-data/EEG_data/
-data/fMRI_data/
+# Data (download from https://openneuro.org/datasets/ds004796; the scripts create data/)
+data/
+
+# Generated brain renderings (src/render_nilearn_*.py) and old figure exports
+figures/nilearn_*.png
+figures/elbow_curve_*.png
 
 # Build artifacts and caches
 src/libhfd.so
