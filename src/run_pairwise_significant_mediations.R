@@ -29,14 +29,16 @@ suppressPackageStartupMessages({
 ## -----------------------------
 data_path   <- "data/mediation_input_n64.csv"   # from src/build_mediation_input.py
 sample_path <- "data/participants_n64.csv"   # from src/select_participants.py
-sig_path    <- "results/mediation/mediation_grid_significant_acme.csv"
+med_set     <- Sys.getenv("MEDIATION_SET", "smri")   # as in src/mediation_grid.R
+out_dir     <- if (med_set == "smri") "results/mediation" else file.path("results/mediation", med_set)
+sig_path    <- file.path(out_dir, "mediation_grid_significant_acme.csv")
 base_seed   <- 2026L
 n_cores     <- as.integer(Sys.getenv("MEDIATION_CORES", Sys.getenv("SLURM_CPUS_PER_TASK", "1")))
 
 ## Output CSVs
-out_01 <- "results/mediation/pairwise_mediation_0_vs_1.csv"
-out_02 <- "results/mediation/pairwise_mediation_0_vs_2.csv"
-out_12 <- "results/mediation/pairwise_mediation_1_vs_2.csv"
+out_01 <- file.path(out_dir, "pairwise_mediation_0_vs_1.csv")
+out_02 <- file.path(out_dir, "pairwise_mediation_0_vs_2.csv")
+out_12 <- file.path(out_dir, "pairwise_mediation_1_vs_2.csv")
 
 ## -----------------------------
 ## 2. Load data

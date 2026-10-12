@@ -1,5 +1,5 @@
 ## ======================================================================
-## Omnibus mediation grid: gene -> sMRI mediator (med_*) -> outcome (y_*)
+## Omnibus mediation grid: gene -> mediator (med_*) -> outcome (y_*)
 ## mediation::mediate, quasi-Bayesian Monte Carlo (10,000 sims), gene coded
 ## 0 = N, 1 = A+P-, 2 = A+P+ and contrasted as 2 vs 0. ACME p-values are
 ## FDR-corrected across all mediator-outcome pairs.
@@ -7,6 +7,9 @@
 ## Run from the repository root:
 ##   MEDIATION_CORES=60 Rscript src/mediation_grid.R            # all outcomes
 ##   MEDIATION_CORES=60 Rscript src/mediation_grid.R 1 16       # outcomes 1-16 only
+##   MEDIATION_SET=dynamic MEDIATION_CORES=4 Rscript src/mediation_grid.R
+##       # the four EEG/fMRI mediators instead of the sMRI ones, as a separate family with
+##       # its own FDR, written to results/mediation/dynamic/
 ## One CSV per outcome is written to results/mediation/grid_parts/ and
 ## outcomes that already have a part file are skipped, so runs can resume or
 ## be split across jobs. When every outcome is done, the parts are combined
@@ -22,9 +25,12 @@ suppressPackageStartupMessages({
 
 data_path     <- "data/mediation_input_n64.csv"   # from src/build_mediation_input.py
 sample_path   <- "data/participants_n64.csv"   # from src/select_participants.py
-parts_dir     <- "results/mediation/grid_parts"
-out_all       <- "results/mediation/mediation_grid_all_pairs.csv"
-out_sig       <- "results/mediation/mediation_grid_significant_acme.csv"
+med_set       <- Sys.getenv("MEDIATION_SET", "smri")   # "smri" or "dynamic" (EEG and fMRI)
+stopifnot(med_set %in% c("smri", "dynamic"))
+out_dir       <- if (med_set == "smri") "results/mediation" else file.path("results/mediation", med_set)
+parts_dir     <- file.path(out_dir, "grid_parts")
+out_all       <- file.path(out_dir, "mediation_grid_all_pairs.csv")
+out_sig       <- file.path(out_dir, "mediation_grid_significant_acme.csv")
 n_sims        <- 10000
 base_seed     <- 2026L
 n_cores       <- as.integer(Sys.getenv("MEDIATION_CORES", Sys.getenv("SLURM_CPUS_PER_TASK", "1")))
@@ -47,7 +53,8 @@ message("n = ", nrow(dat), " (gene: ", paste(names(table(dat$gene)), table(dat$g
 ## -----------------------------
 treat_var <- "gene"
 med_vars  <- grep("^med_", names(dat), value = TRUE)
-med_vars  <- med_vars[!grepl("^med_(EEG|fMRI)_", med_vars)]   # sMRI mediators only
+is_dynamic <- grepl("^med_(EEG|fMRI)_", med_vars)
+med_vars  <- if (med_set == "dynamic") med_vars[is_dynamic] else med_vars[!is_dynamic]
 y_vars    <- grep("^y_", names(dat), value = TRUE)
 
 covars <- c("age", "sex", "education", "learning_deficits", "HSV_r", "BMI",
