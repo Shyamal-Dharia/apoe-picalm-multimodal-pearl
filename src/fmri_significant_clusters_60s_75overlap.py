@@ -9,7 +9,6 @@ import numpy as np
 import pandas as pd
 import nibabel as nib
 import templateflow.api as tf
-from nilearn import datasets
 from nilearn import image
 from nilearn.plotting import view_connectome
 from scipy import ndimage
@@ -316,8 +315,14 @@ def load_schaefer_coordinates(n_rois: int = 100) -> tuple[np.ndarray, list[str]]
             ]
         )
 
-    labels = datasets.fetch_atlas_schaefer_2018(n_rois=n_rois, yeo_networks=7)
-    atlas_labels = [label.decode("utf-8") for label in labels["labels"]]
+    # Names from the TemplateFlow label table of the same atlas image. (nilearn's older
+    # Schaefer label file has the same parcels and order but 19 outdated region names.)
+    label_table = pd.read_csv(
+        tf.get(template="MNI152NLin2009cAsym", atlas="Schaefer2018",
+               desc=f"{n_rois}Parcels7Networks", suffix="dseg", extension=".tsv"),
+        sep="\t",
+    )
+    atlas_labels = label_table.sort_values("index")["name"].tolist()
     return np.asarray(coordinates), atlas_labels
 
 
@@ -588,8 +593,7 @@ def summarize_top_connectivity_pairs(
     mean_windows_array = np.asarray(mean_windows)
     all_mean = np.mean(mean_windows_array, axis=0)
 
-    labels = datasets.fetch_atlas_schaefer_2018(n_rois=100, yeo_networks=7)
-    atlas_labels = [label.decode("utf-8") for label in labels["labels"]]
+    _, atlas_labels = load_schaefer_coordinates(n_rois=100)
 
     top_indices = np.argsort(all_mean)[-top_n:][::-1]
 

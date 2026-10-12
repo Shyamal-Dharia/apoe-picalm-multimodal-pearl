@@ -1,30 +1,38 @@
-"""Group-comparison tables: demographics (Table 1), sMRI post hoc (Table 5), clinical post hoc (Table 6).
+"""Group-comparison tables: baseline (Table 1), non-imaging post hoc (Table 3), sMRI post hoc (Table S4).
 
 Run from the repository root after src/select_participants.py:
     python src/descriptive_tables.py
-Writes CSVs to results/tables/.
+Writes CSVs to results/tables/ at full precision (round when reporting). The file names
+table5_smri_posthoc.csv and table6_clinical_posthoc.csv keep the table numbers of the first
+submission; they hold Supplementary Table S4 and Table 3 of the paper.
 
-Post hoc comparisons follow JASP's one-way ANOVA post hoc output: mean difference
-(group 1 - group 2), standard error from the pooled ANOVA error term, Bonferroni-adjusted
-p-values over the three pairwise contrasts, and Tukey-adjusted 95% confidence intervals.
+Post hoc comparisons follow JASP's one-way ANOVA post hoc output (src/group_stats.py):
+mean difference (group 1 - group 2), standard error from the pooled ANOVA error term,
+Bonferroni-adjusted p-values over the three pairwise contrasts, Tukey-adjusted 95%
+confidence intervals, and Cohen's d (mean difference / pooled ANOVA SD).
 
 Feature selection (no correction across features):
   sMRI      the 5 features per measure with the lowest Kruskal-Wallis p; contrasts with
-            Bonferroni p < .07 are reported.
+            Bonferroni p < .10 are reported (the dagger threshold used in all tables).
   Clinical  variables with Kruskal-Wallis p < .05 (absolute blood cell counts; the
             percentage variants are not tested); all three contrasts are reported.
+q_fdr_kw is the Benjamini-Hochberg q of the Kruskal-Wallis p across all features of the
+same family (all regions of one sMRI measure; all clinical variables). It documents the
+selection, which itself is uncorrected.
+
+table1_baseline.csv adds the baseline characteristics and genotype counts per group.
+smri_kruskal_all.csv and nonimaging_kruskal_all.csv list the Kruskal-Wallis p and q of all sMRI regions
+and all non-imaging measures.
 """
-import itertools
 import os
 
 import numpy as np
 import pandas as pd
-from scipy import stats
-from statsmodels.stats.libqsturng import qsturng
+
+from group_stats import GROUPS, fdr_q, kruskal_p, posthoc, split_by_group
 
 SAMPLE_CSV = "data/participants_n64.csv"
 OUT_DIR = "results/tables"
-GROUPS = ["N", "A+P-", "A+P+"]
 
 SMRI_FILES = {
     "Sulcal Depth": "data/MRI_data/ROI_aparc_HCP_MMP1_depth.csv_with_groups.csv",
@@ -34,7 +42,7 @@ SMRI_FILES = {
     "Fractal Dimension": "data/MRI_data/ROI_aparc_HCP_MMP1_fractaldimension.csv_with_groups.csv",
 }
 SMRI_TOP_K = 5
-SMRI_REPORT_P = 0.07
+SMRI_REPORT_P = 0.10  # same threshold as the dagger marker in the other tables and figures
 CLINICAL_SELECT_P = 0.05
 
 CLINICAL_VARS = (
@@ -51,36 +59,6 @@ CLINICAL_VARS = (
 )
 
 
-def split_by_group(values, groups):
-    values = pd.to_numeric(values, errors="coerce")
-    return {g: values[groups == g].dropna().to_numpy(float) for g in GROUPS}
-
-
-def kruskal_p(by_group):
-    samples = list(by_group.values())
-    if min(len(s) for s in samples) < 2 or np.var(np.concatenate(samples)) == 0:
-        return np.nan
-    return stats.kruskal(*samples).pvalue
-
-
-def posthoc(by_group):
-    """JASP-style ANOVA post hoc: Bonferroni p, Tukey 95% CI, pooled SE."""
-    df_within = sum(len(v) for v in by_group.values()) - len(GROUPS)
-    mse = sum(((v - v.mean()) ** 2).sum() for v in by_group.values()) / df_within
-    t_tukey = qsturng(0.95, len(GROUPS), df_within) / np.sqrt(2)
-    n_contrasts = len(GROUPS) * (len(GROUPS) - 1) // 2
-    rows = []
-    for g1, g2 in itertools.combinations(GROUPS, 2):
-        a, b = by_group[g1], by_group[g2]
-        diff = a.mean() - b.mean()
-        se = np.sqrt(mse * (1 / len(a) + 1 / len(b)))
-        p_bonf = min(1.0, n_contrasts * 2 * stats.t.sf(abs(diff / se), df_within))
-        rows.append({"group_1": g1, "group_2": g2, "diff": diff,
-                     "ci_lower": diff - t_tukey * se, "ci_upper": diff + t_tukey * se,
-                     "se": se, "p_bonf": p_bonf})
-    return rows
-
-
 os.makedirs(OUT_DIR, exist_ok=True)
 sample = pd.read_csv(SAMPLE_CSV)
 groups = sample["Risk_Group"]
@@ -93,8 +71,32 @@ for name, part in [*((g, sample[groups == g]) for g in GROUPS), ("Overall", samp
                    "age_mean": part["age"].mean(), "age_sd": part["age"].std()})
 pd.DataFrame(table1).round(2).to_csv(f"{OUT_DIR}/table1_demographics.csv", index=False)
 
-# Table 5: sMRI post hoc
+# Table 1 (extended): baseline characteristics and genotypes, counts or mean (SD)
+CATEGORICAL_BASELINE = {
+    "APOE_haplotype": "APOE haplotype",
+    "PICALM_rs3851179": "PICALM rs3851179",
+    "education": "Education (0 primary, 1 secondary, 2 partial higher, 3 higher)",
+    "hypertension": "Hypertension (1 = yes)",
+    "diabetes": "Diabetes (1 = yes)",
+    "dementia_history_parents": "Parents with dementia (0, 1, 2)",
+    "smoking_status": "Smoking (0 no, 1 yes, 2 past)",
+}
+baseline = []
+parts = [*((g, sample[groups == g]) for g in GROUPS), ("Overall", sample)]
+for var in ["age", "BMI"]:
+    baseline.append({"variable": var, "level": "mean (SD)",
+                     **{name: f"{part[var].mean():.2f} ({part[var].std():.2f})" for name, part in parts}})
+for var, label in CATEGORICAL_BASELINE.items():
+    values = sample[var].map(lambda v: "missing" if pd.isna(v) else str(v).strip())
+    values = values.str.replace(r"\.0$", "", regex=True)
+    for level in sorted(values.unique()):
+        baseline.append({"variable": label, "level": level,
+                         **{name: int((values[part.index] == level).sum()) for name, part in parts}})
+pd.DataFrame(baseline).to_csv(f"{OUT_DIR}/table1_baseline.csv", index=False)
+
+# Table S4: sMRI post hoc
 table5 = []
+smri_all = []  # Kruskal-Wallis p and q of every sMRI region
 for measure, path in SMRI_FILES.items():
     roi = pd.read_csv(path).drop(columns=["l???", "r???"], errors="ignore")
     roi["participant_id"] = roi["names"].astype(str).str.replace("_T1w", "", regex=False)
@@ -102,19 +104,31 @@ for measure, path in SMRI_FILES.items():
     features = [c for c in roi.columns if c not in ("names", "GROUP", "participant_id")]
     ranked = sorted(((kruskal_p(split_by_group(data[f], data["Risk_Group"])), f) for f in features
                      if not np.isnan(kruskal_p(split_by_group(data[f], data["Risk_Group"])))))
+    q_by_feature = fdr_q({f: p for p, f in ranked})
+    smri_all += [{"measure": measure, "region": f, "p_kruskal": p, "q_fdr_kw": q_by_feature[f]} for p, f in ranked]
     for p_kw, feature in ranked[:SMRI_TOP_K]:
         for row in posthoc(split_by_group(data[feature], data["Risk_Group"])):
             if row["p_bonf"] < SMRI_REPORT_P:
-                table5.append({"measure": measure, "region": feature, "p_kruskal": p_kw, **row})
-pd.DataFrame(table5).round(4).to_csv(f"{OUT_DIR}/table5_smri_posthoc.csv", index=False)
+                table5.append({"measure": measure, "region": feature, "p_kruskal": p_kw, **row,
+                               "q_fdr_kw": q_by_feature[feature], "n_features_in_family": len(ranked)})
+pd.DataFrame(table5).to_csv(f"{OUT_DIR}/table5_smri_posthoc.csv", index=False)
+pd.DataFrame(smri_all).to_csv(f"{OUT_DIR}/smri_kruskal_all.csv", index=False)
 
-# Table 6: clinical post hoc
+# Table 3: non-imaging post hoc
 table6 = []
+p_by_var = {var: kruskal_p(split_by_group(sample[var], groups)) for var in CLINICAL_VARS}
+q_by_var = fdr_q(p_by_var)
 for var in CLINICAL_VARS:
     by_group = split_by_group(sample[var], groups)
-    p_kw = kruskal_p(by_group)
+    p_kw = p_by_var[var]
     if p_kw < CLINICAL_SELECT_P:
-        table6 += [{"variable": var, "p_kruskal": p_kw, **row} for row in posthoc(by_group)]
-pd.DataFrame(table6).round(4).to_csv(f"{OUT_DIR}/table6_clinical_posthoc.csv", index=False)
+        table6 += [{"variable": var, "p_kruskal": p_kw, **row, "q_fdr_kw": q_by_var[var],
+                    "n_features_in_family": len(q_by_var)} for row in posthoc(by_group)]
+pd.DataFrame(table6).to_csv(f"{OUT_DIR}/table6_clinical_posthoc.csv", index=False)
+# Kruskal-Wallis p and q of every non-imaging measure (diabetes, constant, has no test)
+pd.DataFrame({"variable": CLINICAL_VARS, "p_kruskal": [p_by_var[v] for v in CLINICAL_VARS],
+              "q_fdr_kw": [q_by_var.get(v, np.nan) for v in CLINICAL_VARS]}).to_csv(
+    f"{OUT_DIR}/nonimaging_kruskal_all.csv", index=False)
 
-print(f"Wrote {OUT_DIR}/: table1 ({len(table1)} rows), table5 ({len(table5)} rows), table6 ({len(table6)} rows)")
+print(f"Wrote {OUT_DIR}/: table1 ({len(table1)} rows), table1_baseline ({len(baseline)} rows), "
+      f"table5 ({len(table5)} rows), table6 ({len(table6)} rows)")
