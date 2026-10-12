@@ -1,4 +1,4 @@
-# MM-Mediation-Genes-AD
+# apoe-picalm-multimodal-pearl
 
 **Parallel Multimodal Testing of APOE-ε4 and PICALM rs3851179 Genotype Groups in Healthy Middle-Aged Adults Finds No Differences That Survive Correction**
 
