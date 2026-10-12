@@ -11,7 +11,7 @@ null, with one Bonferroni correction across the 16 tests. Descriptive group comp
 exploratory mediation models follow.
 
 <p align="center">
-  <img src="figures/MA-v4.png" width="650">
+  <img src="figures/workflow.png" width="750">
 </p>
 
 ## Setup
@@ -51,12 +51,10 @@ manuscript.
 | 8. fMRI head motion | `FMRIPREP_DIR=/path python src/fmri_motion_qc.py` | Table S2 |
 | 9. Figures | `python src/paper_figures.py` | Figures 2–5 |
 | 10. Elbow curves | `python src/kmeans_elbow.py` | Figure S4 |
-| 11. LaTeX tables | `TEMPLATEFLOW_HOME=/path python src/latex_tables.py` | Tables 1–3, S3, S4; `results/tables/permutation_summary.csv` |
-| 12. Power reference | `python src/power_reference.py` | `results/tables/minimum_detectable_effect.csv`, `replication_sample_size.csv` |
-| 13. Mediation input | `python src/build_mediation_input.py` (after steps 5, 6 and 9) | `data/mediation_input_n64.csv` |
-| 14. Mediation | `MEDIATION_CORES=32 Rscript src/mediation_grid.R`<br>`MEDIATION_CORES=32 MEDIATION_SET=dynamic Rscript src/mediation_grid.R`<br>`Rscript src/run_pairwise_significant_mediations.R` (planned follow-up, runs only for pairs with q < 0.05)<br>(`cluster/trillium_mediation.sbatch`, `cluster/trillium_mediation_dynamic.sbatch`) | `results/mediation/`, `results/mediation/dynamic/` |
-| 15. Mediation summary | `python src/mediation_summary.py`<br>`python src/mediation_summary.py results/mediation/dynamic results/latex dynamic` | counts in the text, Table S5 |
-| 16. Graphical abstract | `python src/render_nilearn_surface_parcels_lateral.py`<br>`python src/render_nilearn_surface_docs_gray.py`<br>`python src/graphical_abstract.py && python src/graphical_abstract_journal.py`<br>`python src/ga_result_grid.py` | `results/figures/graphical_abstract*`, `ga_result_grid*` |
+| 11. Power reference | `python src/power_reference.py` | `results/tables/minimum_detectable_effect.csv`, `replication_sample_size.csv` |
+| 12. Mediation input | `python src/build_mediation_input.py` (after steps 5, 6 and 9) | `data/mediation_input_n64.csv` |
+| 13. Mediation | `MEDIATION_CORES=32 Rscript src/mediation_grid.R`<br>`MEDIATION_CORES=32 MEDIATION_SET=dynamic Rscript src/mediation_grid.R`<br>`Rscript src/run_pairwise_significant_mediations.R` (planned follow-up, runs only for pairs with q < 0.05)<br>(`cluster/trillium_mediation.sbatch`, `cluster/trillium_mediation_dynamic.sbatch`) | `results/mediation/`, `results/mediation/dynamic/` |
+| 14. Mediation summary | `python src/mediation_summary.py`<br>`python src/mediation_summary.py results/mediation/dynamic results/latex dynamic` | counts in the text, Table S5 |
 
 Notes
 - Groups: A+ = any APOE-ε4 allele; P+ = PICALM rs3851179 G/G; APOE-ε2 carriers are excluded.
@@ -75,21 +73,19 @@ Notes
   fixed order, so the k-means initialisation and the results do not depend on Python's hash
   seed. `--perm-scheme per-fold` reproduces the April 2026 table, which shuffled each fold's
   training labels separately.
-- Step 14 fits about 102,600 sMRI models and 256 dynamic models with 10,000 simulations each
+- Step 13 fits about 102,600 sMRI models and 256 dynamic models with 10,000 simulations each
   (about 38 CPU-days). The grid script writes one file per outcome and resumes after
   interruption. `cluster/trillium_mediation.sbatch` runs it on one 192-core SLURM node.
 - Random seeds are fixed throughout: 9, 42, 123, 2021 and 2022 for clustering and
   classification, and one seed per mediation model, so results do not depend on core count.
 - Steps 7 and 9 share the three-group post hoc test in `src/group_stats.py` (ANOVA contrasts,
   Bonferroni p over three contrasts, Tukey-adjusted CIs, Cohen's d), as in JASP.
-- Step 16 also needs `data/EEG_data/channel_names.txt`, the 127 EEG channel labels in recording
-  order (one per line, from any recording's `.vhdr` header).
 - Not needed to reproduce the paper: the notebooks (`EEG_feature_analysis.ipynb`,
   `fMRI_feature_analysis.ipynb`, `fMRI_viz.ipynb`, `final_permutation_test.ipynb`,
   `mediation_pairwise_tables.ipynb`, `mediation_filter_significant.ipynb`, and
   `k-means_plot.ipynb`, which `src/kmeans_elbow.py` replaces), `eeg_permutation_hfd.py`,
   `eeg_hfd_range.py` (a quality check of the HFD range), `subject_deviation_profiles.py`
-  (exploratory, written for an earlier draft) and the other `render_nilearn_*.py` scripts.
+  (exploratory, written for an earlier draft) and the `render_nilearn_*.py` scripts.
 
 ## Citation
 

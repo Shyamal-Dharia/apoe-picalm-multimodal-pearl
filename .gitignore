@@ -14,3 +14,9 @@ __pycache__/
 *.pyc
 .ipynb_checkpoints/
 .Rhistory
+
+# Manuscript-only scripts (LaTeX tables, graphical abstract), kept locally
+src/latex_tables.py
+src/graphical_abstract.py
+src/graphical_abstract_journal.py
+src/ga_result_grid.py
