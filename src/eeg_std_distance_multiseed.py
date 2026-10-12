@@ -47,12 +47,19 @@ RAW_VHDR_CANDIDATES = [
 ]
 
 SAMPLE_CSV = Path("data/participants_n64.csv")  # analysis sample, from src/select_participants.py
-OUTPUT_ROOT = Path("results/eeg/eeg_std_distance_multiseed")
-EEG_DIRECTION_N_HIGHER_CSV = Path("results/eeg/eeg_subject_mean_variability_N_higher_multiseed.csv")
-EEG_DIRECTION_APM_HIGHER_CSV = Path("results/eeg/eeg_subject_mean_variability_A_plus_P_minus_higher_multiseed.csv")
-EEG_DIRECTION_APP_HIGHER_CSV = Path("results/eeg/eeg_subject_mean_variability_A_plus_P_plus_higher_multiseed.csv")
-EEG_DIRECTION_RISK_HIGHER_CSV = Path("results/eeg/eeg_subject_mean_variability_risk_higher_multiseed.csv")
-EEG_DIRECTION_COMBINED_CSV = Path("results/eeg/eeg_subject_mean_variability_by_direction_multiseed.csv")
+# EEG_RESULTS_DIR redirects all outputs (e.g. for a sensitivity run); default results/eeg
+RESULTS_DIR = Path(os.environ.get("EEG_RESULTS_DIR", "results/eeg"))
+# A participant's value for a state is the SD over their windows in that state; with fewer than
+# MIN_WINDOWS windows the value is missing. With one window the SD is 0, which is not a measured
+# variability, so the paper uses 2 (as src/f1_permutation_pipeline.py); 1 reproduces the run
+# before 2026-10-10.
+MIN_WINDOWS = int(os.environ.get("EEG_MIN_WINDOWS", "2"))
+OUTPUT_ROOT = RESULTS_DIR / "eeg_std_distance_multiseed"
+EEG_DIRECTION_N_HIGHER_CSV = RESULTS_DIR / "eeg_subject_mean_variability_N_higher_multiseed.csv"
+EEG_DIRECTION_APM_HIGHER_CSV = RESULTS_DIR / "eeg_subject_mean_variability_A_plus_P_minus_higher_multiseed.csv"
+EEG_DIRECTION_APP_HIGHER_CSV = RESULTS_DIR / "eeg_subject_mean_variability_A_plus_P_plus_higher_multiseed.csv"
+EEG_DIRECTION_RISK_HIGHER_CSV = RESULTS_DIR / "eeg_subject_mean_variability_risk_higher_multiseed.csv"
+EEG_DIRECTION_COMBINED_CSV = RESULTS_DIR / "eeg_subject_mean_variability_by_direction_multiseed.csv"
 DIRECTION_SPLIT_FIGURE_FILENAME = "regional_variability_direction_split_consistent_multiseed.png"
 
 GROUP_TO_LABEL = {"N": 0, "A+P-": 1, "A+P+": 2}
@@ -252,7 +259,7 @@ def compute_std_distance_to_centroid_only(
         std_dist = np.full(k_states, np.nan)
         for state in range(k_states):
             state_windows = subject_windows[subject_preds == state]
-            if state_windows.shape[0] == 0:
+            if state_windows.shape[0] < max(MIN_WINDOWS, 1):
                 continue
             distances = np.linalg.norm(state_windows - centroids[state], axis=1)
             std_dist[state] = np.std(distances)

@@ -4,18 +4,20 @@ import numpy as np
 import re
 import pandas as pd
 import hfd # reference to https://github.com/inuritdino/HiguchiFractalDimension
-from scipy.signal import butter, lfilter, welch
+from scipy.signal import butter, sosfilt, welch
 from scipy.stats import skew, kurtosis
 
 def butter_bandpass(lowcut, highcut, fs, order=5):
+    # Second-order sections: the (b, a) form of this filter is numerically unstable for the
+    # delta band at 256 Hz (a pole outside the unit circle). Same causal Butterworth response.
     nyq = 0.5 * fs
     low = lowcut / nyq
     high = highcut / nyq
-    return butter(order, [low, high], btype='band')
+    return butter(order, [low, high], btype='band', output='sos')
 
 def butter_bandpass_filter(data, lowcut, highcut, fs, order=5):
-    b, a = butter_bandpass(lowcut, highcut, fs, order=order)
-    return lfilter(b, a, data)
+    sos = butter_bandpass(lowcut, highcut, fs, order=order)
+    return sosfilt(sos, data)
 
 # Define frequency bands.
 band_dict = {
@@ -32,10 +34,12 @@ csv_data = pd.read_csv('data/participants.csv', sep='\t')
 skipped_log = []
 fs = 256
 id_pattern = re.compile(r'(sub-\d+)')
-npz_files = glob.glob('data/EEG_data/resting_state_preprocessed_data_new/*.npz')
+npz_files = sorted(glob.glob('data/EEG_data/resting_state_preprocessed_data_new/*.npz'))
+# Optional sharding for parallel runs: SHARD=i N_SHARDS=n processes every n-th file from i.
+npz_files = npz_files[int(os.environ.get('SHARD', 0))::int(os.environ.get('N_SHARDS', 1))]
 
 # Create an output directory for the features.
-output_dir = 'data/EEG_data/HFD_PSD_4sec_75overlap_6min'
+output_dir = os.environ.get('EEG_FEATURES_OUT', 'data/EEG_data/HFD_PSD_4sec_75overlap_6min')
 os.makedirs(output_dir, exist_ok=True)
 
 for npz_file in npz_files:

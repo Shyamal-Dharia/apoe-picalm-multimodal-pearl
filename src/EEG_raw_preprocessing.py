@@ -8,7 +8,7 @@ per‑subject NumPy archives with risk‑group labels.
 
 Key changes 2025‑06‑06
 • Explicit zero‑phase FIR filtering (phase='zero').
-• Average reference applied after artefact correction.
+• No re-referencing: the data keep the online FCz reference (the average-reference line below is disabled).
 • Safer label handling + numeric encoding for machine learning.
 • Removed legacy FCz stacking code.
 """
